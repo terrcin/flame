@@ -1,5 +1,13 @@
 defmodule FLAME.FlyBackend.Mounts do
-  @derive Jason.Encoder
+  @derive {Inspect,
+           only: [
+             :name,
+             :path,
+             :volume,
+             :extend_threshold_percent,
+             :add_size_gb,
+             :size_gb_limit
+           ]}
   defstruct name: nil,
             path: nil,
             volume: nil,

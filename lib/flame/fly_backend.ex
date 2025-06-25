@@ -254,44 +254,51 @@ defmodule FLAME.FlyBackend do
     {result, div(micro, 1000)}
   end
 
-  defp get_volume_id(%FlyBackend{ mounts: [] }), do: {nil, 0}
-  defp get_volume_id(%FlyBackend{ mounts: mounts } = state) when is_list(mounts) do
-        {volumes, time} = get_volumes(state)
+  defp get_volume_id(%FlyBackend{mounts: []}), do: {nil, 0}
 
-        case volumes do
-          [] ->
-            {:error, "no volumes to mount"}
-          all_volumes ->
-            volume_ids_by_name =
-              all_volumes
-              |> Enum.filter(fn vol ->
-                vol["attached_machine_id"] == nil
-                and vol["state"] == "created"
-              end)
-              |> Enum.group_by(&(&1["name"]), &(&1["id"]))
+  defp get_volume_id(%FlyBackend{mounts: mounts} = state) when is_list(mounts) do
+    {volumes, time} = get_volumes(state)
 
-              new_mounts = Enum.map_reduce(
-                mounts,
-                volume_ids_by_name,
-                fn mount, leftover_vols ->
-                  case List.wrap(leftover_vols[mount.name]) do
-                    [] ->
-                      raise ArgumentError, "not enough fly volumes with the name \"#{mount.name}\" to a FLAME child"
-                    [volume_id | rest] ->
-                      {%{mount | volume: volume_id}, %{leftover_vols | mount.name => rest}}
-                  end
-                end
-              )
+    case volumes do
+      [] ->
+        {:error, "no volumes to mount"}
 
-            {new_mounts, time}
-        end
+      all_volumes ->
+        volume_ids_by_name =
+          all_volumes
+          |> Enum.filter(fn vol ->
+            vol["attached_machine_id"] == nil and
+              vol["state"] == "created"
+          end)
+          |> Enum.group_by(& &1["name"], & &1["id"])
+
+        new_mounts =
+          Enum.map_reduce(
+            mounts,
+            volume_ids_by_name,
+            fn mount, leftover_vols ->
+              case List.wrap(leftover_vols[mount.name]) do
+                [] ->
+                  raise ArgumentError,
+                        "not enough fly volumes with the name \"#{mount.name}\" to a FLAME child"
+
+                [volume_id | rest] ->
+                  {%{mount | volume: volume_id}, %{leftover_vols | mount.name => rest}}
+              end
+            end
+          )
+
+        {new_mounts, time}
+    end
   end
+
   defp get_volume_id(_) do
     raise ArgumentError, "expected a list of mounts"
   end
 
   defp get_volumes(%FlyBackend{} = state) do
-      {vols, get_vols_time} = with_elapsed_ms(fn ->
+    {vols, get_vols_time} =
+      with_elapsed_ms(fn ->
         Req.get!("#{state.host}/v1/apps/#{state.app}/volumes",
           connect_options: [timeout: state.boot_timeout],
           retry: false,
@@ -299,7 +306,7 @@ defmodule FLAME.FlyBackend do
         )
       end)
 
-      {vols.body, get_vols_time}
+    {vols.body, get_vols_time}
   end
 
   @impl true

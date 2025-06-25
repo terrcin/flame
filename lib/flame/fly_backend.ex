@@ -275,7 +275,7 @@ defmodule FLAME.FlyBackend do
           end)
           |> Enum.group_by(& &1["name"], & &1["id"])
 
-        new_mounts =
+        {new_mounts, _unused_vols} =
           Enum.map_reduce(
             mounts,
             volume_ids_by_name,

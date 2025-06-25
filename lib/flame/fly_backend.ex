@@ -187,7 +187,7 @@ defmodule FLAME.FlyBackend do
     provided_opts =
       conf
       |> Keyword.merge(opts)
-      |> Keyword.update(:mounts, [], fn mounts -> Enum.each(mounts, &struct(Mount, &1)) end)
+      |> Keyword.update(:mounts, [], fn mounts -> Enum.map(mounts, &struct(Mount, &1)) end)
       |> Keyword.validate!(@valid_opts)
 
     %FlyBackend{} = state = Map.merge(default, Map.new(provided_opts))

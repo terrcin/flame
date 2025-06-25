@@ -267,8 +267,8 @@ defmodule FLAME.FlyBackend do
         volume_ids_by_name =
           all_volumes
           |> Enum.filter(fn vol ->
-            vol["attached_machine_id"] == nil and
-              vol["state"] == "created"
+            vol["attached_machine_id"] == nil && vol["state"] == "created" &&
+              vol["host_status"] == "ok"
           end)
           |> Enum.group_by(& &1["name"], & &1["id"])
 
@@ -292,21 +292,23 @@ defmodule FLAME.FlyBackend do
     end
   end
 
-  defp get_volume_id(_) do
+  def get_volume_id(_) do
     raise ArgumentError, "expected a list of mounts"
   end
 
   defp get_volumes(%FlyBackend{} = state) do
     {vols, get_vols_time} =
       with_elapsed_ms(fn ->
-        Req.get!("#{state.host}/v1/apps/#{state.app}/volumes",
-          connect_options: [timeout: state.boot_timeout],
-          retry: false,
-          auth: {:bearer, state.token}
+        http_get!("#{state.host}/v1/apps/#{state.app}/volumes", @retry,
+          headers: [
+            {"Accept", "application/json"},
+            {"Authorization", "Bearer #{state.token}"}
+          ],
+          connect_timeout: state.boot_timeout
         )
       end)
 
-    {vols.body, get_vols_time}
+    {vols, get_vols_time}
   end
 
   @impl true
@@ -394,6 +396,50 @@ defmodule FLAME.FlyBackend do
     |> :crypto.strong_rand_bytes()
     |> Base.encode16(case: :lower)
     |> binary_part(0, len)
+  end
+
+  defp http_get!(url, remaining_tries, opts) do
+    Keyword.validate!(opts, [:headers, :connect_timeout])
+
+    headers =
+      for {field, val} <- Keyword.fetch!(opts, :headers),
+          do: {String.to_charlist(field), val}
+
+    connect_timeout = Keyword.fetch!(opts, :connect_timeout)
+
+    http_opts = [
+      ssl:
+        [
+          verify: :verify_peer,
+          depth: 2,
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ] ++ cacerts_options(),
+      connect_timeout: connect_timeout
+    ]
+
+    case :httpc.request(:get, {url, headers}, http_opts, []) do
+      {:ok, {{_, 200, _}, _, response_body}} ->
+        response_body
+        |> to_string()
+        |> JSON.decode!()
+
+      # 429 Too Many Requests (rate limited)
+      # 412 Precondition Failed (can't find capacity)
+      # 409 Conflict (the flyd tried ending up not having capacity)
+      # 422 Unprocessable Entity (could not find capcity for volume workloads)
+      {:ok, {{_, status, _}, _, _response_body}}
+      when status in [429, 412, 409, 422] and remaining_tries > 0 ->
+        Process.sleep(1000)
+        http_get!(url, remaining_tries - 1, opts)
+
+      {:ok, {{_, status, reason}, _, resp_body}} ->
+        raise "failed GET #{url} with #{inspect(status)} (#{inspect(reason)}): #{inspect(resp_body)} #{inspect(headers)}"
+
+      {:error, reason} ->
+        raise "failed GET #{url} with #{inspect(reason)} #{inspect(headers)}"
+    end
   end
 
   defp http_post!(url, remaining_tries, opts) do

@@ -292,7 +292,7 @@ defmodule FLAME.FlyBackend do
     end
   end
 
-  def get_volume_id(_) do
+  defp get_volume_id(_) do
     raise ArgumentError, "expected a list of mounts"
   end
 

@@ -1,4 +1,4 @@
-defmodule FLAME.FlyBackend.Mounts do
+defmodule FLAME.FlyBackend.Mount do
   @derive {Inspect,
            only: [
              :name,

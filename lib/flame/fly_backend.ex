@@ -330,7 +330,7 @@ defmodule FLAME.FlyBackend do
               region: state.region,
               config: %{
                 image: state.image,
-                mounts: mounts,
+                mounts: Enum.map(mounts, &Map.from_struct/1),
                 init: state.init,
                 guest: %{
                   cpu_kind: state.cpu_kind,

@@ -33,6 +33,8 @@ defmodule FLAME.FlyBackend do
 
   * `:gpus` - The number of runner GPUs. Defaults to `1` if `:gpu_kind` is set.
 
+  * `:mounts` - List volumes to mount. Refer to FlyBackend.Mount of opt details
+
   * `:boot_timeout` - The boot timeout. Defaults to `30_000`.
 
   * `:app` – The name of the otp app. Defaults to `System.get_env("FLY_APP_NAME")`,
@@ -260,21 +262,20 @@ defmodule FLAME.FlyBackend do
     {result, div(micro, 1000)}
   end
 
-  defp get_volume_id(%FlyBackend{mounts: []}), do: {[], 0}
+  defp get_volume_ids(%FlyBackend{mounts: []}), do: []
 
-  defp get_volume_id(%FlyBackend{mounts: mounts} = state) when is_list(mounts) do
-    {volumes, time} = get_volumes(state)
-
-    case volumes do
+  defp get_volume_ids(%FlyBackend{mounts: mounts} = state) when is_list(mounts) do
+    case get_volumes(state) do
       [] ->
-        {:error, "no volumes to mount"}
+        {:error, "no Fly volumes found"}
 
       all_volumes ->
         volume_ids_by_name =
           all_volumes
           |> Enum.filter(fn vol ->
             vol["attached_machine_id"] == nil && vol["state"] == "created" &&
-              vol["host_status"] == "ok"
+              vol["host_status"] == "ok" &&
+              Map.get(state, :region, vol["region"]) == vol["region"]
           end)
           |> Enum.shuffle()
           |> Enum.group_by(& &1["name"], & &1["id"])
@@ -283,45 +284,42 @@ defmodule FLAME.FlyBackend do
           Enum.map_reduce(
             mounts,
             volume_ids_by_name,
-            fn mount, leftover_vols ->
-              case List.wrap(leftover_vols[mount.name]) do
-                [] ->
-                  raise ArgumentError,
-                        "not enough fly volumes with the name \"#{mount.name}\" to a FLAME child"
+            fn
+              %{volume: nil} = mount, leftover_vols ->
+                case leftover_vols[mount.name] do
+                  [volume_id | rest] ->
+                    {%{mount | volume: volume_id}, %{leftover_vols | mount.name => rest}}
 
-                [volume_id | rest] ->
-                  {%{mount | volume: volume_id}, %{leftover_vols | mount.name => rest}}
-              end
+                  _ ->
+                    raise ArgumentError,
+                          "no available Fly volumes with the name \"#{mount.name}\" in region \"#{Map.get(state, :region)}\" found"
+                end
+
+              mount, leftover_vols ->
+                {mount, leftover_vols}
             end
           )
 
-        {new_mounts, time}
+        Enum.map(new_mounts, &Map.from_struct/1)
     end
   end
 
-  defp get_volume_id(_) do
+  defp get_volume_ids(_) do
     raise ArgumentError, "expected a list of mounts"
   end
 
   defp get_volumes(%FlyBackend{} = state) do
-    {vols, get_vols_time} =
-      with_elapsed_ms(fn ->
-        http_get!("#{state.host}/v1/apps/#{state.app}/volumes", @retry,
-          headers: [
-            {"Accept", "application/json"},
-            {"Authorization", "Bearer #{state.token}"}
-          ],
-          connect_timeout: state.boot_timeout
-        )
-      end)
-
-    {vols, get_vols_time}
+    http_get!("#{state.host}/v1/apps/#{state.app}/volumes", @retry,
+      headers: [
+        {"Accept", "application/json"},
+        {"Authorization", "Bearer #{state.token}"}
+      ],
+      connect_timeout: state.boot_timeout
+    )
   end
 
   @impl true
   def remote_boot(%FlyBackend{parent_ref: parent_ref} = state) do
-    {mounts, volume_validate_time} = get_volume_id(state)
-
     {resp, req_connect_time} =
       with_elapsed_ms(fn ->
         http_post!("#{state.host}/v1/apps/#{state.app}/machines", @retry,
@@ -331,13 +329,13 @@ defmodule FLAME.FlyBackend do
             {"Authorization", "Bearer #{state.token}"}
           ],
           connect_timeout: state.boot_timeout,
-          body:
+          body: fn ->
             JSON.encode!(%{
               name: state.runner_node_base,
               region: state.region,
               config: %{
                 image: state.image,
-                mounts: Enum.map(mounts, &Map.from_struct/1),
+                mounts: get_volume_ids(state),
                 init: state.init,
                 guest: %{
                   cpu_kind: state.cpu_kind,
@@ -353,6 +351,7 @@ defmodule FLAME.FlyBackend do
                 metadata: Map.put(state.metadata, :flame_parent_ip, state.local_ip)
               }
             })
+          end
         )
       end)
 
@@ -363,7 +362,7 @@ defmodule FLAME.FlyBackend do
       )
     end
 
-    remaining_connect_window = state.boot_timeout - req_connect_time - volume_validate_time
+    remaining_connect_window = state.boot_timeout - req_connect_time
 
     case resp do
       %{"id" => id, "instance_id" => instance_id, "private_ip" => ip} ->
@@ -426,11 +425,9 @@ defmodule FLAME.FlyBackend do
       connect_timeout: connect_timeout
     ]
 
-    case :httpc.request(:get, {url, headers}, http_opts, []) do
+    case :httpc.request(:get, {url, headers}, http_opts, body_format: :binary) do
       {:ok, {{_, 200, _}, _, response_body}} ->
-        response_body
-        |> to_string()
-        |> JSON.decode!()
+        JSON.decode!(response_body) |> dbg()
 
       # 429 Too Many Requests (rate limited)
       # 412 Precondition Failed (can't find capacity)
@@ -456,7 +453,12 @@ defmodule FLAME.FlyBackend do
       for {field, val} <- Keyword.fetch!(opts, :headers),
           do: {String.to_charlist(field), val}
 
-    body = Keyword.fetch!(opts, :body)
+    body =
+      case Keyword.fetch!(opts, :body) do
+        body_func when is_function(body_func) -> body_func.()
+        body -> body
+      end
+
     connect_timeout = Keyword.fetch!(opts, :connect_timeout)
     content_type = Keyword.fetch!(opts, :content_type)
 

@@ -187,7 +187,6 @@ defmodule FLAME.FlyBackend do
     provided_opts =
       conf
       |> Keyword.merge(opts)
-      |> Keyword.update(:mounts, [], fn mounts -> Enum.map(mounts, &struct(Mount, &1)) end)
       |> Keyword.validate!(@valid_opts)
 
     %FlyBackend{} = state = Map.merge(default, Map.new(provided_opts))
@@ -198,7 +197,11 @@ defmodule FLAME.FlyBackend do
       end
     end
 
-    state = %{state | runner_node_base: "#{state.app}-flame-#{rand_id(20)}"}
+    mounts = state.mounts |> List.wrap() |> Enum.map(&Mount.parse_opts/1)
+
+    state =
+      Map.merge(state, %{mounts: mounts, runner_node_base: "#{state.app}-flame-#{rand_id(20)}"})
+
     parent_ref = make_ref()
 
     encoded_parent =
@@ -273,6 +276,7 @@ defmodule FLAME.FlyBackend do
             vol["attached_machine_id"] == nil && vol["state"] == "created" &&
               vol["host_status"] == "ok"
           end)
+          |> Enum.shuffle()
           |> Enum.group_by(& &1["name"], & &1["id"])
 
         {new_mounts, _unused_vols} =

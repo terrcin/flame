@@ -27,7 +27,7 @@ defmodule FLAME.FlyBackend.Mount do
   def parse_opts(opts) do
     default = %Mount{extend_threshold_percent: 0, add_size_gb: 0, size_gb_limit: 0}
 
-    provided_opts = Keyword.validate(opts, @valid_opts)
+    provided_opts = Keyword.validate!(opts, @valid_opts)
 
     %Mount{} = state = Map.merge(default, Map.new(provided_opts))
 

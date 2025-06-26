@@ -260,7 +260,7 @@ defmodule FLAME.FlyBackend do
     {result, div(micro, 1000)}
   end
 
-  defp get_volume_id(%FlyBackend{mounts: []}), do: {nil, 0}
+  defp get_volume_id(%FlyBackend{mounts: []}), do: {[], 0}
 
   defp get_volume_id(%FlyBackend{mounts: mounts} = state) when is_list(mounts) do
     {volumes, time} = get_volumes(state)
